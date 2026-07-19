@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ECHO COMBAT</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/addons/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<!-- start screen -->
+<div id="start">
+  <div class="panel">
+    <div class="logo">ECHO<span>COMBAT</span></div>
+    <div class="tag">ZERO-G ROBOT COMBAT // WEBXR</div>
+    <input id="callsign" maxlength="14" placeholder="CALLSIGN" autocomplete="off" spellcheck="false">
+    <button id="launch">ENTER STATION</button>
+    <div class="controls-grid">
+      <div class="ctl-col">
+        <h3>DESKTOP</h3>
+        <p><b>WASD</b> thrust &nbsp;<b>SPACE / CTRL</b> up / down</p>
+        <p><b>SHIFT</b> boost &nbsp;<b>X</b> brake</p>
+        <p><b>E</b> grab surface &middot; press again (or SPACE) to launch off</p>
+        <p><b>MOUSE</b> look &nbsp;<b>CLICK</b> fire / use terminals</p>
+        <p><b>V</b> toggle mic (proximity chat)</p>
+      </div>
+      <div class="ctl-col">
+        <h3>VR</h3>
+        <p><b>L-STICK</b> thrust &nbsp;<b>R-STICK</b> up/down + snap turn</p>
+        <p><b>GRIP</b> near any surface to grab &middot; fling to move</p>
+        <p><b>TRIGGER</b> fire / point at terminals</p>
+        <p><b>BOTH GRIPS</b> in open space: brake</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- HUD -->
+<div id="hud" class="hidden">
+  <div id="crosshair"><div></div><div></div></div>
+  <div id="vitals">
+    <div class="bar"><div id="hpfill"></div><span>HULL</span></div>
+    <div class="bar small"><div id="boostfill"></div><span>BOOST</span></div>
+  </div>
+  <div id="topright">
+    <div id="roomlabel">LOBBY</div>
+    <div id="alivelabel" class="hidden"></div>
+  </div>
+  <div id="centermsg" class="hidden"></div>
+  <div id="submsg" class="hidden"></div>
+  <div id="feed"></div>
+  <div id="bottombar">
+    <button id="micbtn" class="hudbtn">MIC OFF</button>
+    <button id="vrbtn" class="hudbtn hidden">ENTER VR</button>
+  </div>
+  <div id="hint"></div>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "echo-combat",
+  "version": "1.0.0",
+  "description": "Zero-gravity multiplayer VR robot combat — WebXR + desktop",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "postinstall": "node server/vendor.js"
+  },
+  "dependencies": {
+    "three": "^0.182.0",
+    "ws": "^8.18.0"
+  }
+}

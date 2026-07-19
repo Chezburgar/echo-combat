@@ -1,0 +1,10 @@
+# Render Blueprint — deploys the full multiplayer server (HTTP + WebSocket).
+# One-click: https://render.com/deploy?repo=<this repo's GitHub URL>
+services:
+  - type: web
+    name: echo-combat
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /
