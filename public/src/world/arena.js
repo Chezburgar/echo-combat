@@ -54,6 +54,64 @@ function scaleUV(geo, ru, rv) {
   return geo;
 }
 
+// A sphere shell with real holes cut where tunnels attach. Drops any triangle
+// whose direction from center falls within a tunnel's angular cone, so you can
+// actually see and fly through the mouths instead of hitting a solid wall.
+function punchedSphere(radius, mouths, seg = 64, rings = 40) {
+  const src = new THREE.SphereGeometry(radius, seg, rings).toNonIndexed();
+  const P = src.attributes.position, U = src.attributes.uv, N = src.attributes.normal;
+  // hole a touch smaller than the tube so the door ring's rim hides the
+  // triangle-cut edge of the opening
+  const cones = (mouths || []).map(m => ({
+    dir: m.dir.clone().normalize(),
+    cos: Math.cos(Math.min(1.3, Math.asin(Math.min(0.97, (m.r + 0.15) / radius))))
+  }));
+  const kp = [], ku = [], kn = [];
+  const cx = new THREE.Vector3();
+  for (let t = 0; t < P.count; t += 3) {
+    cx.set(
+      (P.getX(t) + P.getX(t + 1) + P.getX(t + 2)) / 3,
+      (P.getY(t) + P.getY(t + 1) + P.getY(t + 2)) / 3,
+      (P.getZ(t) + P.getZ(t + 1) + P.getZ(t + 2)) / 3
+    ).normalize();
+    let hole = false;
+    for (const c of cones) if (cx.dot(c.dir) >= c.cos) { hole = true; break; }
+    if (hole) continue;
+    for (let k = 0; k < 3; k++) {
+      kp.push(P.getX(t + k), P.getY(t + k), P.getZ(t + k));
+      ku.push(U.getX(t + k), U.getY(t + k));
+      kn.push(N.getX(t + k), N.getY(t + k), N.getZ(t + k));
+    }
+  }
+  src.dispose();
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(kp, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(ku, 2));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(kn, 3));
+  return g;
+}
+
+// A flat wall (in local XY, +Z normal) with circular holes cut for tunnels.
+function punchedPlane(w, h, holes, mat, repX, repY) {
+  const shape = new THREE.Shape();
+  shape.moveTo(-w / 2, -h / 2);
+  shape.lineTo(w / 2, -h / 2);
+  shape.lineTo(w / 2, h / 2);
+  shape.lineTo(-w / 2, h / 2);
+  shape.closePath();
+  for (const ho of holes) {
+    const p = new THREE.Path();
+    p.absarc(ho.u, ho.v, ho.r, 0, Math.PI * 2, true);
+    shape.holes.push(p);
+  }
+  const geo = new THREE.ShapeGeometry(shape, 18);
+  const pos = geo.attributes.position, uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) / w + 0.5) * repX, (pos.getY(i) / h + 0.5) * repY);
+  const m = new THREE.Mesh(geo, mat);
+  m.receiveShadow = true;
+  return m;
+}
+
 function wallMesh(w, h, mat, repX, repY) {
   return new THREE.Mesh(scaleUV(new THREE.PlaneGeometry(w, h), repX, repY), mat);
 }
@@ -72,16 +130,26 @@ export function buildArena(engine) {
   const stars = new THREE.Mesh(new THREE.SphereGeometry(420, 32, 20), M.starfield);
   scene.add(stars);
 
+  // where every tunnel meets every chamber — used to punch real openings
+  // in the chamber walls so you can see (and fly) down the tunnels.
+  const mouths = {};
+  for (const name of Object.keys(CHAMBERS)) mouths[name] = [];
+  for (const [na, nb, r] of EDGES) {
+    const dir = CHAMBERS[nb].p.clone().sub(CHAMBERS[na].p).normalize();
+    mouths[na].push({ dir: dir.clone(), r });
+    mouths[nb].push({ dir: dir.clone().negate(), r });
+  }
+
   // ---------------- chambers ----------------
   for (const [name, c] of Object.entries(CHAMBERS)) {
     if (c.kind === 'sphere') {
       world.addSphere(c.p, c.r);
-      buildSphereChamber(scene, M, world, railT, c);
+      buildSphereChamber(scene, M, world, railT, c, mouths[name]);
     } else {
       const min = c.p.clone().sub(c.size.clone().multiplyScalar(0.5));
       const max = c.p.clone().add(c.size.clone().multiplyScalar(0.5));
       world.addBox(min, max);
-      buildBoxChamber(scene, M, world, railT, { min, max, windowWall: c.win, accent: c.accent });
+      buildBoxChamber(scene, M, world, railT, { min, max, windowWall: c.win, accent: c.accent, center: c.p, mouths: mouths[name] });
     }
   }
 
@@ -89,16 +157,33 @@ export function buildArena(engine) {
   for (const [na, nb, r] of EDGES) {
     const A = CHAMBERS[na], B = CHAMBERS[nb];
     const dir = B.p.clone().sub(A.p).normalize();
-    const a = A.p.clone().addScaledVector(dir, Math.max(2, chamberInnerRadius(A) - 2.5));
-    const b = B.p.clone().addScaledVector(dir, -Math.max(2, chamberInnerRadius(B) - 2.5));
+    // tube reaches to just inside each chamber's wall so the mouth is flush,
+    // not floating in mid-room. It overlaps the chamber volume by ~1.2m so the
+    // collision union stays continuous.
+    const wallA = chamberInnerRadius(A), wallB = chamberInnerRadius(B);
+    const a = A.p.clone().addScaledVector(dir, Math.max(2, wallA - 1.2));
+    const b = B.p.clone().addScaledVector(dir, -Math.max(2, wallB - 1.2));
     world.addTube(a, b, r);
     buildTunnelVisual(scene, M, world, a, b, r, railT);
 
-    // door rings at both mouths
-    for (const [p, sgn] of [[a, 1], [b, -1]]) {
+    // recessed socket + door ring flush at each chamber wall
+    for (const [center, wall, sgn] of [[A.p, wallA, 1], [B.p, wallB, -1]]) {
+      const lip = center.clone().addScaledVector(dir, sgn * (wall - 0.5));   // at the wall
+      const q = new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), dir);
+
+      // dark tapered socket funnelling inward — sells the opening from any angle
+      const socket = new THREE.Mesh(
+        new THREE.CylinderGeometry(r + 0.05, r + 0.4, 1.7, 20, 1, true),
+        M.socketDark
+      );
+      // cylinder axis (Y) points from wall inward toward the chamber center
+      socket.quaternion.setFromUnitVectors(V(0, 1, 0), dir.clone().multiplyScalar(-sgn));
+      socket.position.copy(center).addScaledVector(dir, sgn * (wall - 0.6));
+      scene.add(socket);
+
       const ring = doorRing(r);
-      ring.position.copy(p).addScaledVector(dir, sgn * 0.3);
-      ring.quaternion.setFromUnitVectors(V(0, 0, 1), dir);
+      ring.position.copy(lip);
+      ring.quaternion.copy(q);
       scene.add(ring);
     }
   }
@@ -146,11 +231,13 @@ function buildTunnelVisual(scene, M, world, a, b, r, railT) {
   group.position.copy(mid);
   group.quaternion.setFromUnitVectors(V(0, 1, 0), dir);
 
+  // DoubleSide so the stub that pokes into each chamber is visible from the
+  // room (BackSide culled it, leaving door rings floating on a blank wall).
   const tube = new THREE.Mesh(
     scaleUV(new THREE.CylinderGeometry(r, r, len, 20, 1, true), 5, Math.max(2, Math.round(len / 3.2))),
     M.hullDark.clone()
   );
-  tube.material.side = THREE.BackSide;
+  tube.material.side = THREE.DoubleSide;
   group.add(tube);
 
   // rib rings
@@ -218,30 +305,40 @@ function buildBoxChamber(scene, M, world, railT, opts) {
   const c = min.clone().add(max).multiplyScalar(0.5);
 
   const g = new THREE.Group();
-  const mk = (w, h, mat) => wallMesh(w, h, mat, w / 4.5, h / 4.5);
-  const floor = mk(size.x, size.z, M.deck);
-  floor.rotation.x = -Math.PI / 2;
-  floor.position.set(c.x, min.y, c.z);
-  g.add(floor);
-  const ceil = mk(size.x, size.z, M.hullDark);
-  ceil.rotation.x = Math.PI / 2;
-  ceil.position.set(c.x, max.y, c.z);
-  g.add(ceil);
-  const wl = mk(size.z, size.y, M.hullLight);
-  wl.rotation.y = Math.PI / 2;
-  wl.position.set(min.x, c.y, c.z);
-  g.add(wl);
-  const wr = mk(size.z, size.y, M.hullLight);
-  wr.rotation.y = -Math.PI / 2;
-  wr.position.set(max.x, c.y, c.z);
-  g.add(wr);
-  const wn = mk(size.x, size.y, M.hullLight);
-  wn.position.set(c.x, c.y, min.z);
-  g.add(wn);
-  const wf = mk(size.x, size.y, M.hullLight);
-  wf.rotation.y = Math.PI;
-  wf.position.set(c.x, c.y, max.z);
-  g.add(wf);
+  const half = size.clone().multiplyScalar(0.5);
+  const mouths = opts.mouths || [];
+
+  // six faces: position (world), inward normal, in-plane u/v axes + their sizes
+  const X = V(1, 0, 0), Y = V(0, 1, 0), Z = V(0, 0, 1);
+  const faces = [
+    { pos: V(c.x, min.y, c.z), n: Y.clone(), u: X.clone(), v: Z.clone(), w: size.x, h: size.z, mat: M.deck, out: V(0, -1, 0) },
+    { pos: V(c.x, max.y, c.z), n: Y.clone().negate(), u: X.clone(), v: Z.clone(), w: size.x, h: size.z, mat: M.hullDark, out: V(0, 1, 0) },
+    { pos: V(min.x, c.y, c.z), n: X.clone(), u: Z.clone(), v: Y.clone(), w: size.z, h: size.y, mat: M.hullLight, out: V(-1, 0, 0) },
+    { pos: V(max.x, c.y, c.z), n: X.clone().negate(), u: Z.clone(), v: Y.clone(), w: size.z, h: size.y, mat: M.hullLight, out: V(1, 0, 0) },
+    { pos: V(c.x, c.y, min.z), n: Z.clone(), u: X.clone(), v: Y.clone(), w: size.x, h: size.y, mat: M.hullLight, out: V(0, 0, -1) },
+    { pos: V(c.x, c.y, max.z), n: Z.clone().negate(), u: X.clone(), v: Y.clone(), w: size.x, h: size.y, mat: M.hullLight, out: V(0, 0, 1) }
+  ];
+  for (const f of faces) {
+    // which tunnels exit through this face (dominant axis match)
+    const holes = [];
+    for (const m of mouths) {
+      const d = m.dir;
+      const comps = [Math.abs(d.x), Math.abs(d.y), Math.abs(d.z)];
+      const domAxis = comps[0] >= comps[1] && comps[0] >= comps[2] ? 0 : (comps[1] >= comps[2] ? 1 : 2);
+      const outAxis = f.out.x ? 0 : f.out.y ? 1 : 2;
+      if (domAxis !== outAxis) continue;
+      if (d.dot(f.out) <= 0.2) continue;
+      const halfOut = Math.abs(half.getComponent(outAxis));
+      const t = halfOut / Math.abs(d.getComponent(outAxis));
+      const hit = d.clone().multiplyScalar(t);          // relative to center
+      holes.push({ u: hit.dot(f.u), v: hit.dot(f.v), r: m.r + 0.15 });
+    }
+    const wall = punchedPlane(f.w, f.h, holes, f.mat, f.w / 4.5, f.h / 4.5);
+    const basis = new THREE.Matrix4().makeBasis(f.u, f.v, f.n);
+    wall.quaternion.setFromRotationMatrix(basis);
+    wall.position.copy(f.pos);
+    g.add(wall);
+  }
 
   // window with star view
   let winPos, winRot;
@@ -336,7 +433,7 @@ function buildBoxChamber(scene, M, world, railT, opts) {
   scene.add(g);
 }
 
-function buildSphereChamber(scene, M, world, railT, cdef) {
+function buildSphereChamber(scene, M, world, railT, cdef, mouths) {
   const center = cdef.p, r = cdef.r;
   const g = new THREE.Group();
   g.position.copy(center);
@@ -344,7 +441,7 @@ function buildSphereChamber(scene, M, world, railT, cdef) {
   const glowColor = cdef.hub === 'reactor' ? 0xffa060 : cdef.hub === 'holo' ? 0x6adcff : (r >= 6.5 ? 0x6adcff : 0x9fd8ff);
 
   const shell = new THREE.Mesh(
-    scaleUV(new THREE.SphereGeometry(r, 36, 24), Math.max(3, Math.round(r * 0.55)), Math.max(2, Math.round(r * 0.35))),
+    scaleUV(punchedSphere(r, mouths), Math.max(3, Math.round(r * 0.55)), Math.max(2, Math.round(r * 0.35))),
     M.hullDark.clone()
   );
   shell.material.side = THREE.BackSide;

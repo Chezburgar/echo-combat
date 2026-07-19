@@ -27,6 +27,7 @@ export function materials() {
     }),
     hazard: new THREE.MeshStandardMaterial({ map: hazard, roughness: 0.7, metalness: 0.3 }),
     metalDark: new THREE.MeshStandardMaterial({ color: 0x2b323c, roughness: 0.5, metalness: 0.85 }),
+    socketDark: new THREE.MeshStandardMaterial({ color: 0x0d1219, roughness: 0.7, metalness: 0.6, side: THREE.DoubleSide }),
     metalMid: new THREE.MeshStandardMaterial({ color: 0x59626e, roughness: 0.55, metalness: 0.8 }),
     metalLight: new THREE.MeshStandardMaterial({ color: 0x9fb0bd, roughness: 0.35, metalness: 0.9 }),
     pipe: new THREE.MeshStandardMaterial({ color: 0x6a7480, roughness: 0.45, metalness: 0.9 }),
