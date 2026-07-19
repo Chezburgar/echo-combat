@@ -43,6 +43,7 @@ class App {
     this.viewmodel = null;
 
     this.myName = '';
+    this.started = false;
     this.hp = 100;
     this.shieldT = 0;
     this.stateTimer = 0;
@@ -91,6 +92,7 @@ class App {
     const launch = async () => {
       const name = (nameInput.value.trim() || 'UNIT-' + Math.floor(Math.random() * 900 + 100)).toUpperCase();
       localStorage.setItem('callsign', nameInput.value.trim());
+      nameInput.blur();          // or the input keeps eating WASD keys
       this.myName = name;
       this.audio.init();
       document.getElementById('launch').textContent = 'CONNECTING...';
@@ -101,7 +103,14 @@ class App {
         // no server (static hosting / cold start): solo mode, bots still work
         welcome = this.net.goOffline(name);
       }
-      this.onWelcome(welcome);
+      try {
+        this.onWelcome(welcome);
+      } catch (e) {
+        console.error('join failed', e);
+        // never leave the player floating at the origin
+        this.local.spawnAt(this.pickLobbySpawn(), new THREE.Vector3(0, 4, 13));
+      }
+      this.started = true;
       start.classList.add('hidden');
       this.hud.show();
       this.input.wantPointerLock = true;
@@ -572,12 +581,22 @@ class App {
   // ================================================================ frame loop
 
   loop(dt, frame) {
+    // one bad frame must never kill the whole game
+    try {
+      this.loopInner(dt, frame);
+    } catch (e) {
+      console.error('frame error', e);
+      this.input.endFrame();
+    }
+  }
+
+  loopInner(dt, frame) {
     this.time += dt;
     const session = this.engine.renderer.xr.getSession();
     this.input.pollXR(session);
 
-    if (!this.net.connected) {
-      // idle attract: slow orbit before joining
+    if (!this.started) {
+      // idle attract view before joining
       this.lobby.animate(this.time);
       this.input.endFrame();
       return;
@@ -586,6 +605,15 @@ class App {
     // ---------------- local player ----------------
     const events = this.local.update(dt);
     this.shieldT = Math.max(0, this.shieldT - dt);
+
+    // failsafe: if anything ever pushes us outside the playable union, respawn
+    const headChk = this.local.headWorld(_v2);
+    if (!this.local.grab && this.local.world && !this.local.world.inside(headChk, -2)) {
+      const sp = this.mode === 'match'
+        ? this.arena.spawns[Math.floor(Math.random() * this.arena.spawns.length)]
+        : this.pickLobbySpawn();
+      this.local.spawnAt(sp.clone(), this.mode === 'match' ? new THREE.Vector3(0, 0, 0) : new THREE.Vector3(0, 4, 13));
+    }
 
     for (const shot of events.shots) {
       this.effects.spawnProjectile(this.net.id, shot.o, shot.d, colorForId(this.net.id));

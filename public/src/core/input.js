@@ -13,7 +13,8 @@ export class Input {
 
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
-      if (e.target && e.target.tagName === 'INPUT') return;
+      // never let a focused input eat movement keys while playing
+      if (e.target && e.target.tagName === 'INPUT' && !this.pointerLocked) return;
       this.keys.add(e.code);
       this.pressed.add(e.code);
     });
